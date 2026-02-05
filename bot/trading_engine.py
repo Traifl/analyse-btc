@@ -26,7 +26,7 @@ from bot.executor import PaperExecutor, LiveExecutor
 logger = logging.getLogger(__name__)
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
-WARMUP_CANDLES = 150  # enough for MA99 + some buffer
+RAW_BUFFER_SIZE = 300  # raw OHLCV rows to keep (enough for MA99 + margin)
 
 
 class TradingEngine:
@@ -34,7 +34,7 @@ class TradingEngine:
 
     Flow per candle:
     1. Receive new kline from WebSocket (or polling fallback)
-    2. Update candle buffer + recalculate indicators
+    2. Update raw OHLCV buffer + recalculate indicators
     3. Run all strategies -> combined signal
     4. Risk manager approves/rejects
     5. Executor places trade if approved
@@ -66,7 +66,8 @@ class TradingEngine:
         self.combined_strategy: CombinedStrategy | None = None
         self.risk_manager = RiskManager()
         self.executor = None
-        self.candle_buffer: pd.DataFrame | None = None
+        self.raw_buffer: pd.DataFrame | None = None    # raw OHLCV only
+        self.candle_buffer: pd.DataFrame | None = None  # featured (for tests)
 
     def _load_model(self):
         """Load pre-trained XGBoost model from models/ directory."""
@@ -80,22 +81,26 @@ class TradingEngine:
 
     def _warmup(self):
         """Fetch historical candles to warm up indicators."""
-        logger.info(f"Warming up with {WARMUP_CANDLES} historical candles...")
+        logger.info(f"Warming up with {RAW_BUFFER_SIZE} historical candles...")
         df = get_historical_klines(
             symbol=self.symbol, interval=self.interval,
             days=30, client=self.client,
         )
         df = clean_data(df)
-        df = add_technical_features(df)
-        df = df.dropna()
 
-        # Keep last WARMUP_CANDLES
-        if len(df) > WARMUP_CANDLES:
-            df = df.iloc[-WARMUP_CANDLES:]
+        # Keep raw OHLCV buffer large enough for indicator warm-up
+        if len(df) > RAW_BUFFER_SIZE:
+            df = df.iloc[-RAW_BUFFER_SIZE:]
 
-        self.candle_buffer = df
-        self.state.set("candle_count", len(df))
-        logger.info(f"Warm-up done: {len(df)} candles in buffer")
+        self.raw_buffer = df[["open", "high", "low", "close", "volume"]].copy()
+
+        # Pre-compute featured buffer for initial state
+        featured = add_technical_features(df)
+        featured = featured.dropna()
+        self.candle_buffer = featured
+
+        self.state.set("candle_count", len(self.raw_buffer))
+        logger.info(f"Warm-up done: {len(self.raw_buffer)} raw candles, {len(featured)} featured rows")
 
     def _setup_strategies(self):
         """Initialize all strategy objects."""
@@ -129,19 +134,24 @@ class TradingEngine:
                 "volume": float(candle["volume"]),
             }], index=[pd.Timestamp(candle["close_time"], unit="ms")])
 
-            # Append to buffer and recalculate features
-            raw = pd.concat([self.candle_buffer[["open", "high", "low", "close", "volume"]], new_row])
-            featured = add_technical_features(raw)
-            featured = featured.dropna()
+            # Append to raw OHLCV buffer (deduplicate by index)
+            self.raw_buffer = pd.concat([self.raw_buffer, new_row])
+            self.raw_buffer = self.raw_buffer[~self.raw_buffer.index.duplicated(keep="last")]
+            if len(self.raw_buffer) > RAW_BUFFER_SIZE:
+                self.raw_buffer = self.raw_buffer.iloc[-RAW_BUFFER_SIZE:]
 
-            # Trim buffer
-            if len(featured) > WARMUP_CANDLES:
-                featured = featured.iloc[-WARMUP_CANDLES:]
+            # Recalculate features on full raw buffer (300 rows -> plenty for MA99)
+            featured = add_technical_features(self.raw_buffer.copy())
+            featured = featured.dropna()
             self.candle_buffer = featured
+
+            if len(featured) == 0:
+                logger.warning(f"No valid featured rows after indicators (raw buffer: {len(self.raw_buffer)})")
+                return
 
             current_price = float(candle["close"])
             self.state.set("current_price", current_price)
-            self.state.set("candle_count", len(featured))
+            self.state.set("candle_count", len(self.raw_buffer))
 
             # Run strategies
             combined_signal, individual_signals = self.combined_strategy.evaluate(featured)

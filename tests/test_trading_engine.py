@@ -32,22 +32,22 @@ def sample_candle():
 
 @pytest.fixture
 def warm_buffer():
-    """Pre-built candle buffer with features."""
+    """Pre-built raw OHLCV buffer + featured buffer."""
     np.random.seed(42)
-    n = 200
+    n = 300
     dates = pd.date_range("2024-01-01", periods=n, freq="h")
     close = 50000 + np.cumsum(np.random.randn(n) * 100)
 
     from src.preprocessing import add_technical_features
-    df = pd.DataFrame({
+    raw = pd.DataFrame({
         "open": close - 50,
         "high": close + 100,
         "low": close - 100,
         "close": close,
         "volume": np.random.rand(n) * 1000 + 100,
     }, index=dates)
-    df = add_technical_features(df).dropna()
-    return df
+    featured = add_technical_features(raw.copy()).dropna()
+    return raw, featured
 
 
 def test_engine_init(state):
@@ -59,8 +59,10 @@ def test_engine_init(state):
 
 def test_process_candle(state, warm_buffer, sample_candle):
     """Test that _process_candle runs without error given proper setup."""
+    raw, featured = warm_buffer
     engine = TradingEngine(mode="paper", state=state)
-    engine.candle_buffer = warm_buffer
+    engine.raw_buffer = raw.copy()
+    engine.candle_buffer = featured
 
     # Mock model
     model = MagicMock()
@@ -82,8 +84,10 @@ def test_process_candle(state, warm_buffer, sample_candle):
 
 def test_process_candle_buy_signal(state, warm_buffer, sample_candle):
     """Test that a strong buy signal results in a position."""
+    raw, featured = warm_buffer
     engine = TradingEngine(mode="paper", state=state)
-    engine.candle_buffer = warm_buffer
+    engine.raw_buffer = raw.copy()
+    engine.candle_buffer = featured
 
     # Model predicts big rise -> buy signal
     model = MagicMock()

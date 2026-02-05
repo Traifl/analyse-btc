@@ -30,7 +30,11 @@ class XGBoostStrategy:
 
     def evaluate(self, df: pd.DataFrame) -> Signal:
         """Generate signal from the latest row of featured data."""
+        if len(df) == 0:
+            return Signal(0, 0.0, "xgboost")
         available = [c for c in self.feature_cols if c in df.columns]
+        if not available:
+            return Signal(0, 0.0, "xgboost")
         row = df[available].iloc[[-1]].dropna(axis=1)
         if row.empty or len(row.columns) < len(available) * 0.5:
             return Signal(0, 0.0, "xgboost")
@@ -53,6 +57,8 @@ class PatternStrategy:
 
     def evaluate(self, df: pd.DataFrame) -> Signal:
         """Signal from pattern detection on latest row."""
+        if len(df) == 0:
+            return Signal(0, 0.0, "pattern")
         required = ["atr", "bb_upper", "bb_lower", "close", "high", "low", "volume_norm"]
         if not all(c in df.columns for c in required):
             return Signal(0, 0.0, "pattern")
@@ -78,6 +84,8 @@ class ClusterStrategy:
 
     def evaluate(self, df: pd.DataFrame) -> Signal:
         """Signal from clustering the latest data point."""
+        if len(df) == 0:
+            return Signal(0, 0.0, "cluster")
         required = ["returns", "volatility", "rsi", "volume_norm", "atr"]
         if not all(c in df.columns for c in required):
             return Signal(0, 0.0, "cluster")
