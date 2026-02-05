@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m venv:*)",
+      "Bash(venvScriptspip install:*)",
+      "Bash(\"c:/Users/Paul/vibecode/analyse_btc/venv/Scripts/pip.exe\" install -r \"c:/Users/Paul/vibecode/analyse_btc/requirements.txt\")",
+      "Bash(\"c:/Users/Paul/vibecode/analyse_btc/venv/Scripts/python.exe\" -m pytest tests/ -v)"
+    ]
+  }
+}
